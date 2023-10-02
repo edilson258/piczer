@@ -1,27 +1,11 @@
-/*use image::{GenericImageView, DynamicImage};
-use image::imageops::FilterType;*/
-
-use std::thread;
-use tiny_http::{Method, Request, Response, Server};
-use std::collections::HashMap;
-
-use std::fs::File;
-
 use image;
-use image::GenericImageView;
+use std::thread;
+use std::collections::HashMap;
+use image::imageops::FilterType;
+use image::{GenericImageView, DynamicImage};
+use tiny_http::{Method, Request, Response, Server};
 
 fn main() {
-    /*
-    let img = image::open("tests/pic.jpg").unwrap();
-
-    let soft = resize(&img, Some(50), Some(50), true);
-    let hard = resize(&img, Some(50), Some(50), false);
-
-    println!("Original {:?}", img.dimensions());
-    println!("Soft {:?}", soft.dimensions());
-    println!("Hard {:?}", hard.dimensions());
-    */
-
     let server = Server::http("0.0.0.0:8000").unwrap();
 
     println!("Server running...");
@@ -93,9 +77,39 @@ fn parse_dimensions(raw_dimensions: String) -> std::result::Result<(u32, u32), (
     }
 }
 
+fn parse_can_keep_aspect_ration(can_keep_aspcet_ration: &str) -> std::result::Result<bool, ()> {
+    match can_keep_aspcet_ration {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(())
+    }
+}
+
 fn abort_request(request: Request, reason: &str) {
     let response = Response::from_string(reason);
     request.respond(response).unwrap();
+}
+
+fn extract_image_from_request(request: &mut Request) -> std::result::Result<DynamicImage, ()> {
+    let mut bytes: Vec::<u8> = vec![];
+
+    if let Err(e) = request.as_reader().read_to_end(&mut bytes) {
+        eprintln!("Error: Couldn't to read image data to buffer: {:?}", e);
+        return Err(());
+    }
+
+    let cursor = std::io::Cursor::new(bytes);
+    let raw_image = image::io::Reader::new(cursor);
+
+    let guessed_format = match raw_image.with_guessed_format() {
+        Ok(image) => image,
+        Err(_) => return Err(()),
+    };
+
+    match guessed_format.decode() {
+        Ok(image) => Ok(image),
+        Err(_) => Err(()),
+    }
 }
 
 fn handle_request(mut request: Request) {
@@ -109,45 +123,78 @@ fn handle_request(mut request: Request) {
         return;
     }
 
-
-    //
-    let mut bytes: Vec::<u8> = vec![];
-    request.as_reader().read_to_end(&mut bytes);
-    let cursor = std::io::Cursor::new(bytes);
-
-    if let Ok(img) = image::io::Reader::new(cursor).with_guessed_format().expect("").decode() {
-        let (w, h) = img.dimensions();
-        println!("Auto Dimensions: {} x {}", w, h);
-    }
-    //
-
-    /* let mut file = File::create("tests/img2.png").unwrap();
-    if let Err(e) = std::io::copy(&mut request.as_reader(), &mut file) {
-        eprintln!("Error: Couldn't copy from stream to file => {:?}", e);
-        abort_request(request, "Internal Server Error");
-        return;
-    }*/
-
     let mut parsed_query = parse_query(request.url().to_string());
 
-    if let Some(dim) = parsed_query.get_mut("dim") {
-        match parse_dimensions(dim.to_string()) {
-            Ok((width, height)) => println!("{width}x{height}"),
+    let recv_dimensions = match parsed_query.get_mut("dim") {
+        Some(dimensions) => match parse_dimensions(dimensions.to_string()) {
+            Ok((width, height)) => (width, height),
             Err(_) => {
                 abort_request(request, "Invalid Dimensions");
                 return;
             }
         }
-    } else {
-        abort_request(request, "Expected Resize Dimensions `WxH`");
-        return;
+        None => {
+            abort_request(request, "Expected Resize Dimensions `WxH`");
+            return;
+        }
+    };
+
+    let can_keep_aspcet_ration = match parsed_query.get_mut("ar") {
+        Some(can_keep_aspcet_ration) => match parse_can_keep_aspect_ration(can_keep_aspcet_ration.as_str()) {
+            Ok(can_keep_aspcet_ration) => can_keep_aspcet_ration,
+            Err(_) => {
+                eprintln!("Error: Couldn't parse can keep aspect ratio");
+                abort_request(request, "Invalid Aspect Ration, it can be `true` or `false`");
+                return;
+            }
+        },
+        None => true
+    };
+
+    let recv_image = match extract_image_from_request(&mut request) {
+        Ok(image) => image,
+        Err(_) => {
+            eprintln!("Error: Couldn't Extact Image from request");
+            abort_request(request, "Unknown Error Occured, make sure that the image is valid");
+            return;
+        }
+    };
+
+
+    let (new_width, new_height) = recv_dimensions;
+    let resized_image = resize(&recv_image, Some(new_width), Some(new_height), can_keep_aspcet_ration);
+
+    // logs
+    println!();
+    println!("======================");
+    println!("[+] Original Dimensions {:?}", recv_image.dimensions());
+    println!("[+] New Dimensions {:?}", recv_dimensions);
+    println!("[+] Aspect Ration: {can_keep_aspcet_ration}");
+    println!("[+] Dimensions After Resize: {:?}", resized_image.dimensions());
+
+    let output_path = "tests/output.png";
+
+    match resized_image.save(&output_path) {
+        Ok(_) => (),
+        Err(e) => {
+            eprintln!("Error: Couldn't save resized image to fs: {:?}", e);
+            abort_request(request, "Intenal Server Error");
+            return;
+        }
     }
 
-    let response = Response::from_string("Hello PicZer");
-    request.respond(response).unwrap();
+    match std::fs::File::open(&output_path) {
+        Ok(file) => {
+            request.respond(Response::from_file(file)).unwrap();
+        },
+        Err(e) => {
+            eprintln!("Error: Couldn't open resized image: {:?}", e);
+            abort_request(request, "Intenal Server Error");
+            return;
+        }
+    }
 }
 
-/*
 fn resize(img: &DynamicImage, w: Option<u32>, h: Option<u32>, aspct_ratio: bool) -> DynamicImage {
     let (original_width, original_height) = img.dimensions();
     let new_width = w.unwrap_or(original_width);
@@ -166,4 +213,3 @@ fn soft_resize(img: &DynamicImage, w: u32, h: u32) -> DynamicImage {
 fn hard_resize(img: &DynamicImage, w: u32, h: u32) -> DynamicImage {
     img.resize_exact(w, h, FilterType::Lanczos3)
 }
-*/
