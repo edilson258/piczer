@@ -57,7 +57,7 @@ You can utilize the Image Resizing Server to resize images via HTTP POST request
 
 Example request using `node script`:
 ```shell
-node examples/main.js
+node examples/node-client/main.js
 ```
 
 ## Configuration
