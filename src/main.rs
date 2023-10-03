@@ -191,7 +191,7 @@ fn handle_request(mut request: Request) {
         resized_image.dimensions()
     );
 
-    let output_path = "tests/output.png";
+    let output_path = "examples/output.png";
 
     match resized_image.save(&output_path) {
         Ok(_) => (),
@@ -201,7 +201,8 @@ fn handle_request(mut request: Request) {
             return;
         }
     }
-
+    
+    // TODO: avoid saveing file to fs and then open it again to send to the user
     match std::fs::File::open(&output_path) {
         Ok(file) => {
             request.respond(Response::from_file(file)).unwrap();
