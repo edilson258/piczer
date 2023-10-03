@@ -1,9 +1,9 @@
 use image;
-use std::thread;
-use std::collections::HashMap;
 use image::imageops::FilterType;
-use image::{GenericImageView, DynamicImage};
-use tiny_http::{Method, Request, Response, Server};
+use image::{DynamicImage, GenericImageView};
+use std::collections::HashMap;
+use std::thread;
+use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 fn main() {
     let server = Server::http("0.0.0.0:8000").unwrap();
@@ -30,14 +30,14 @@ fn has_img_cont_type(request: &Request) -> bool {
         return false;
     }
 
-    if !content_type.unwrap().to_string().starts_with("image/") {
+    if content_type.unwrap().to_string() != String::from("application/octet-stream") {
         return false;
     }
 
     true
 }
 
-fn parse_query(raw_query: String) -> HashMap::<String, String> {
+fn parse_query(raw_query: String) -> HashMap<String, String> {
     let mut clean_query = raw_query.replace("/", "");
     clean_query = clean_query.replace("?", "");
 
@@ -45,7 +45,7 @@ fn parse_query(raw_query: String) -> HashMap::<String, String> {
 
     let mut parsed_query = HashMap::<String, String>::new();
     for rkv in raw_key_values {
-        let key_value: Vec::<_> = rkv.split("=").collect();
+        let key_value: Vec<_> = rkv.split("=").collect();
 
         if key_value.len() == 2 {
             parsed_query.insert(key_value[0].to_string(), key_value[1].to_string());
@@ -56,19 +56,17 @@ fn parse_query(raw_query: String) -> HashMap::<String, String> {
 }
 
 fn parse_dimensions(raw_dimensions: String) -> std::result::Result<(u32, u32), ()> {
-    let parsed_dimensions: Vec::<_> = raw_dimensions.split("x").collect();
+    let parsed_dimensions: Vec<_> = raw_dimensions.split("x").collect();
 
     if parsed_dimensions.len() != 2 {
         return Err(());
     }
 
     match parsed_dimensions[0].parse::<u32>() {
-        Ok(width) => {
-            match parsed_dimensions[1].parse::<u32>() {
-                Ok(height) => Ok((width, height)),
-                Err(_) => {
-                    return Err(());
-                }
+        Ok(width) => match parsed_dimensions[1].parse::<u32>() {
+            Ok(height) => Ok((width, height)),
+            Err(_) => {
+                return Err(());
             }
         },
         Err(_) => {
@@ -81,17 +79,23 @@ fn parse_can_keep_aspect_ration(can_keep_aspcet_ration: &str) -> std::result::Re
     match can_keep_aspcet_ration {
         "true" => Ok(true),
         "false" => Ok(false),
-        _ => Err(())
+        _ => Err(()),
     }
 }
 
 fn abort_request(request: Request, reason: &str) {
-    let response = Response::from_string(reason);
+    let header = Header::from_bytes(&b"Content-Type"[..], &b"text/palin"[..]).unwrap();
+    let mut headers: Vec<Header> = Vec::new();
+    headers.push(header);
+    let reason_bytes = reason.as_bytes();
+
+    let response = Response::new(StatusCode(400), headers, reason_bytes, None, None);
+
     request.respond(response).unwrap();
 }
 
 fn extract_image_from_request(request: &mut Request) -> std::result::Result<DynamicImage, ()> {
-    let mut bytes: Vec::<u8> = vec![];
+    let mut bytes: Vec<u8> = vec![];
 
     if let Err(e) = request.as_reader().read_to_end(&mut bytes) {
         eprintln!("Error: Couldn't to read image data to buffer: {:?}", e);
@@ -119,7 +123,7 @@ fn handle_request(mut request: Request) {
     }
 
     if !has_img_cont_type(&request) {
-        abort_request(request, "Expected `image/*` Content-Type");
+        abort_request(request, "Expected `application/octet-stream` Content-Type");
         return;
     }
 
@@ -132,7 +136,7 @@ fn handle_request(mut request: Request) {
                 abort_request(request, "Invalid Dimensions");
                 return;
             }
-        }
+        },
         None => {
             abort_request(request, "Expected Resize Dimensions `WxH`");
             return;
@@ -140,29 +144,41 @@ fn handle_request(mut request: Request) {
     };
 
     let can_keep_aspcet_ration = match parsed_query.get_mut("ar") {
-        Some(can_keep_aspcet_ration) => match parse_can_keep_aspect_ration(can_keep_aspcet_ration.as_str()) {
-            Ok(can_keep_aspcet_ration) => can_keep_aspcet_ration,
-            Err(_) => {
-                eprintln!("Error: Couldn't parse can keep aspect ratio");
-                abort_request(request, "Invalid Aspect Ration, it can be `true` or `false`");
-                return;
+        Some(can_keep_aspcet_ration) => {
+            match parse_can_keep_aspect_ration(can_keep_aspcet_ration.as_str()) {
+                Ok(can_keep_aspcet_ration) => can_keep_aspcet_ration,
+                Err(_) => {
+                    eprintln!("Error: Couldn't parse can keep aspect ratio");
+                    abort_request(
+                        request,
+                        "Invalid Aspect Ration, it can be `true` or `false`",
+                    );
+                    return;
+                }
             }
-        },
-        None => true
+        }
+        None => true,
     };
 
     let recv_image = match extract_image_from_request(&mut request) {
         Ok(image) => image,
         Err(_) => {
             eprintln!("Error: Couldn't Extact Image from request");
-            abort_request(request, "Unknown Error Occured, make sure that the image is valid");
+            abort_request(
+                request,
+                "Unknown Error Occured, make sure that the image is valid",
+            );
             return;
         }
     };
 
-
     let (new_width, new_height) = recv_dimensions;
-    let resized_image = resize(&recv_image, Some(new_width), Some(new_height), can_keep_aspcet_ration);
+    let resized_image = resize(
+        &recv_image,
+        Some(new_width),
+        Some(new_height),
+        can_keep_aspcet_ration,
+    );
 
     // logs
     println!();
@@ -170,7 +186,10 @@ fn handle_request(mut request: Request) {
     println!("[+] Original Dimensions {:?}", recv_image.dimensions());
     println!("[+] New Dimensions {:?}", recv_dimensions);
     println!("[+] Aspect Ration: {can_keep_aspcet_ration}");
-    println!("[+] Dimensions After Resize: {:?}", resized_image.dimensions());
+    println!(
+        "[+] Dimensions After Resize: {:?}",
+        resized_image.dimensions()
+    );
 
     let output_path = "tests/output.png";
 
@@ -186,7 +205,7 @@ fn handle_request(mut request: Request) {
     match std::fs::File::open(&output_path) {
         Ok(file) => {
             request.respond(Response::from_file(file)).unwrap();
-        },
+        }
         Err(e) => {
             eprintln!("Error: Couldn't open resized image: {:?}", e);
             abort_request(request, "Intenal Server Error");
