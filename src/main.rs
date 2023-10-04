@@ -6,7 +6,13 @@ use std::thread;
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 fn main() {
-    let server = Server::http("0.0.0.0:8000").unwrap();
+    let server = match Server::http("0.0.0.0:8000") {
+        Ok(server) => server,
+        Err(e) => {
+            eprintln!("Error: Couldn't create server :: {:?}", e);
+            return;
+        }
+    };
 
     println!("Server running...");
 
@@ -19,7 +25,7 @@ fn main() {
     }
 }
 
-fn has_img_cont_type(request: &Request) -> bool {
+fn has_expected_content_type(request: &Request) -> bool {
     let content_type = request
         .headers()
         .iter()
@@ -30,7 +36,8 @@ fn has_img_cont_type(request: &Request) -> bool {
         return false;
     }
 
-    if content_type.unwrap().to_string() != String::from("application/octet-stream") {
+    let expected_content_type = "application/octet-stream";
+    if content_type.unwrap().to_string() != expected_content_type {
         return false;
     }
 
@@ -38,6 +45,7 @@ fn has_img_cont_type(request: &Request) -> bool {
 }
 
 fn parse_query(raw_query: String) -> HashMap<String, String> {
+    // TODO: remove `/` and `?` using the proper API
     let mut clean_query = raw_query.replace("/", "");
     clean_query = clean_query.replace("?", "");
 
@@ -59,17 +67,20 @@ fn parse_dimensions(raw_dimensions: String) -> std::result::Result<(u32, u32), (
     let parsed_dimensions: Vec<_> = raw_dimensions.split("x").collect();
 
     if parsed_dimensions.len() != 2 {
+        eprintln!("Error: Invalid Dimensions");
         return Err(());
     }
 
     match parsed_dimensions[0].parse::<u32>() {
         Ok(width) => match parsed_dimensions[1].parse::<u32>() {
             Ok(height) => Ok((width, height)),
-            Err(_) => {
+            Err(e) => {
+                eprintln!("Error: Couldn't parse dimensions => {:?}", e);
                 return Err(());
             }
         },
-        Err(_) => {
+        Err(e) => {
+            eprintln!("Error: Couldn't parse dimensions => {:?}", e);
             return Err(());
         }
     }
@@ -79,7 +90,10 @@ fn parse_can_keep_aspect_ration(can_keep_aspcet_ration: &str) -> std::result::Re
     match can_keep_aspcet_ration {
         "true" => Ok(true),
         "false" => Ok(false),
-        _ => Err(()),
+        _ => {
+            eprintln!("[Error]: Couldn't parse aspect ratio from client");
+            Err(())
+        }
     }
 }
 
@@ -91,14 +105,21 @@ fn abort_request(request: Request, reason: &str) {
 
     let response = Response::new(StatusCode(400), headers, reason_bytes, None, None);
 
-    request.respond(response).unwrap();
+    match request.respond(response) {
+        Ok(_) => {
+            println!("[Message]: Request Aborted Successfully. Reason => {reason}");
+        },
+        Err(e) => {
+            eprintln!("[Error]: Couldn't abort request => {:?}", e);
+        }
+    }
 }
 
 fn extract_image_from_request(request: &mut Request) -> std::result::Result<DynamicImage, ()> {
     let mut bytes: Vec<u8> = vec![];
 
     if let Err(e) = request.as_reader().read_to_end(&mut bytes) {
-        eprintln!("Error: Couldn't to read image data to buffer: {:?}", e);
+        eprintln!("[Error]: Couldn't read image data to buffer => {:?}", e);
         return Err(());
     }
 
@@ -107,12 +128,18 @@ fn extract_image_from_request(request: &mut Request) -> std::result::Result<Dyna
 
     let guessed_format = match raw_image.with_guessed_format() {
         Ok(image) => image,
-        Err(_) => return Err(()),
+        Err(e) => {
+            eprintln!("[Error]: Couldn't guess image format => {:?}", e);
+            return Err(());
+        }
     };
 
     match guessed_format.decode() {
         Ok(image) => Ok(image),
-        Err(_) => Err(()),
+        Err(e) => {
+            eprintln!("[Error]: Couldn't decode image => {:?}", e);
+            return Err(());
+        }
     }
 }
 
@@ -122,7 +149,7 @@ fn handle_request(mut request: Request) {
         return;
     }
 
-    if !has_img_cont_type(&request) {
+    if !has_expected_content_type(&request) {
         abort_request(request, "Expected `application/octet-stream` Content-Type");
         return;
     }
@@ -147,8 +174,8 @@ fn handle_request(mut request: Request) {
         Some(can_keep_aspcet_ration) => {
             match parse_can_keep_aspect_ration(can_keep_aspcet_ration.as_str()) {
                 Ok(can_keep_aspcet_ration) => can_keep_aspcet_ration,
-                Err(_) => {
-                    eprintln!("Error: Couldn't parse can keep aspect ratio");
+                Err(e) => {
+                    eprintln!("[Error]: Couldn't parse can-keep-aspect-ratio => {:?}", e);
                     abort_request(
                         request,
                         "Invalid Aspect Ration, it can be `true` or `false`",
