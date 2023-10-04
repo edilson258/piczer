@@ -1,4 +1,4 @@
-# PicZer :: (Image Resizing Rust App)
+# PicZer :: (Image Resizer Rust App)
 
 - [Introduction](#introduction)
 - [Features](#features)
@@ -14,7 +14,7 @@
 
 ## Introduction
 
-The Image Resizing Server is a powerful and efficient Rust-based HTTP service that allows you to resize images on-the-fly. Whether you need to quickly generate thumbnails or adapt images for your web application, this server simplifies the process.
+Piczer is a powerful and efficient Rust-based HTTP service that allows you to resize images on-the-fly. Whether you need to quickly generate thumbnails or adapt images for your web application, this server simplifies the process.
 
 ## Features
 
@@ -54,6 +54,13 @@ You can utilize the Image Resizing Server to resize images via HTTP POST request
 - **POST /?dim=WxH&ar=true**: Resize an image.
   - `dim` (required): Specify the new dimensions in the format `WxH` (e.g., `300x200`).
   - `ar` (optional): Set to `true` to preserve the aspect ratio (default is `true`).
+
+Example request using `curl`
+```shell
+curl -X POST -H "Content-Type: application/octet-stream" --data-binary @<path/to/image>
+"http://127.0.0.1:8000/?dim=500x500" --output "resized.png" -v
+```
+Note: replace `<path/to/image>` with the path of your image.
 
 Example request using `node script`:
 ```shell
